@@ -1,0 +1,56 @@
+{
+  "name": "sails-hook-lookout",
+  "version": "0.1.0",
+  "description": "Privacy-friendly page view tracking for Sails.js: no cookies, no bots, GDPR minded. Inspired by the Ahoy gem.",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib/",
+    "adapters/",
+    "client/",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "sails",
+    "sails-hook",
+    "analytics",
+    "page-views",
+    "privacy",
+    "gdpr",
+    "cookieless"
+  ],
+  "author": "Martin Dobrovodsky",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MaNi4/sails-hook-lookout.git"
+  },
+  "homepage": "https://github.com/MaNi4/sails-hook-lookout#readme",
+  "bugs": {
+    "url": "https://github.com/MaNi4/sails-hook-lookout/issues"
+  },
+  "sails": {
+    "isHook": true,
+    "hookName": "lookout"
+  },
+  "dependencies": {
+    "isbot": "^5.2.4"
+  },
+  "peerDependencies": {
+    "sails": "^1.5.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "pg": "^8.11.0",
+    "sails": "^1.5.18"
+  }
+}
