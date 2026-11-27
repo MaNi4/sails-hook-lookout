@@ -3,16 +3,20 @@ const assert = require('node:assert/strict');
 const createViewTracking = require('../lib/view-tracking');
 
 const PAGE = '<html><body>page</body></html>';
+const DECLARATIONS = {
+  'blogs/view-one-blog': { name: 'blog:view', renderer: 'view' },
+  'home/view-home': { name: 'home:view', renderer: 'inertia' }
+};
 
-function setup({ declaration = { name: 'blog:view', properties: ({ blog }) => ({ blogId: blog.id }) }, track = true } = {}) {
-  const warnings = [];
+function setup({ event = 'signed-event' } = {}) {
+  const calls = [];
   const wrapView = createViewTracking({
-    findDeclaration: identity => (identity === 'blogs/view-one-blog' ? declaration : undefined),
-    contextFor: () => ({ pageUrl: 'https://example.com/sk/blog/a', referrer: 'https://www.google.com/search?q=x' }),
-    shouldTrack: () => track,
-    signer: { sign: payload => `signed:${JSON.stringify(payload)}` },
-    scriptSrc: '/lookout.js',
-    warn: message => warnings.push(message)
+    findDeclaration: identity => DECLARATIONS[identity],
+    pageEvent: (req, declaration, action, locals) => {
+      calls.push({ declaration, action, locals });
+      return event;
+    },
+    scriptSrc: '/lookout.js'
   });
 
   function render(action, args, statusCode = 200) {
@@ -36,37 +40,34 @@ function setup({ declaration = { name: 'blog:view', properties: ({ blog }) => ({
     return res;
   }
 
-  return { render, warnings };
+  return { render, calls };
 }
 
-test('adds the declared event, signed, to pages of declaring actions', () => {
-  const res = setup().render('blogs/view-one-blog', ['pages/one-blog', { blog: { id: 2 } }]);
-  const event = res.sent.match(/data-event="signed:([^"]*)"/)[1].replace(/&quot;/g, '"');
-  assert.deepEqual(JSON.parse(event), {
-    name: 'blog:view',
-    properties: { blogId: 2 },
-    visit: { landingPage: '/sk/blog/a', referringDomain: 'google.com', utmSource: null, utmMedium: null, utmCampaign: null }
-  });
-  assert.ok(res.sent.includes('data-csrf="tok"'));
+test('adds the script with the event and CSRF token to pages of declaring actions', () => {
+  const { render, calls } = setup();
+  const res = render('blogs/view-one-blog', ['pages/one-blog', { blog: { id: 2 } }]);
+  assert.equal(res.sent, '<html><body>page<script src="/lookout.js" defer data-event="signed-event" data-csrf="tok"></script></body></html>');
+  assert.deepEqual(calls[0].locals, { blog: { id: 2 } });
+  assert.equal(calls[0].action, 'blogs/view-one-blog');
 });
 
-test('without `properties` the event has none', () => {
-  const res = setup({ declaration: { name: 'blog:view' } }).render('blogs/view-one-blog', ['pages/one-blog']);
-  assert.ok(res.sent.includes('&quot;properties&quot;:{}'));
-});
-
-test('leaves other pages, error pages and untracked requests alone', () => {
+test('leaves other pages and error pages alone', () => {
   assert.ok(setup().render('blogs/view-blogs', ['pages/blogs', {}]).passedThrough);
   assert.ok(setup().render('blogs/view-one-blog', ['404', {}], 404).passedThrough);
-  assert.ok(setup({ track: false }).render('blogs/view-one-blog', ['pages/one-blog', { blog: { id: 2 } }]).passedThrough);
 });
 
-test('a failing or invalid declaration renders the page without tracking and warns', () => {
-  const failing = setup({ declaration: { name: 'blog:view', properties: () => { throw new Error('boom'); } } });
-  assert.ok(failing.render('blogs/view-one-blog', ['pages/one-blog', {}]).passedThrough);
-  assert.match(failing.warnings[0], /boom/);
+test('leaves the root view of Inertia actions alone: their event is a page prop', () => {
+  const { render, calls } = setup();
+  assert.ok(render('home/view-home', ['app', { page: {} }]).passedThrough);
+  assert.equal(calls.length, 0);
+});
 
-  const invalid = setup({ declaration: { name: 'blog:view', properties: () => ({ nested: { a: 1 } }) } });
-  assert.ok(invalid.render('blogs/view-one-blog', ['pages/one-blog', {}]).passedThrough);
-  assert.equal(invalid.warnings.length, 1);
+test('renders the page unchanged when there is no event', () => {
+  assert.ok(setup({ event: null }).render('blogs/view-one-blog', ['pages/one-blog', {}]).passedThrough);
+});
+
+test('passes other res.view call forms through', () => {
+  const { render, calls } = setup();
+  assert.ok(render('blogs/view-one-blog', ['pages/one-blog', {}, () => {}]));
+  assert.equal(calls.length, 0);
 });

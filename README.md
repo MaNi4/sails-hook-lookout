@@ -1,3 +1,5 @@
+![Lookout: page view tracking for Sails.js. No cookies. No bots. GDPR minded.](.github/logo.png)
+
 # sails-hook-lookout
 
 Privacy-friendly page view tracking for [Sails.js](https://sailsjs.com), inspired by the
@@ -7,6 +9,16 @@ Privacy-friendly page view tracking for [Sails.js](https://sailsjs.com), inspire
 - **No bots.** Visits are recorded only when a real browser runs the script.
 - **GDPR minded.** No IP addresses stored, data minimisation, automatic retention.
 - **Declarative.** One key next to `inputs` and `exits`; no template or frontend code.
+
+Works with both ways Sails apps render pages:
+
+| App | Pages rendered with | Setup |
+|---|---|---|
+| Sails.js (default) | `res.view`: an exit with `viewTemplatePath` | none |
+| [The Boring JavaScript Stack](https://github.com/sailscastshq/boring-stack) (Inertia.js) | `responseType: 'inertia'` | one script tag, see [The Boring JavaScript Stack](#the-boring-javascript-stack) |
+
+The declaration is the same in both; Lookout reads from the action's exits how its page
+is rendered.
 
 ## How it works
 
@@ -20,7 +32,7 @@ Privacy-friendly page view tracking for [Sails.js](https://sailsjs.com), inspire
 
      lookout: {
        name: 'blog:view',                               // required
-       properties: ({ blog }) => ({ blogId: blog.id })  // optional, receives the view locals
+       properties: ({ blog }) => ({ blogId: blog.id })  // optional, receives the page data
      },
 
      fn: async function ({ slug }) { /* ... */ }
@@ -29,13 +41,16 @@ Privacy-friendly page view tracking for [Sails.js](https://sailsjs.com), inspire
 
    - `name` is the key you query by later. It is required, so statistics stay stable when
      an action is renamed or moved. A convention like `object:action` reads well.
-   - `properties` returns at most 10 flat string, number or boolean values.
+   - `properties` receives what the action returns for its page (the view locals, or
+     the `props` of an Inertia page) and returns at most 10 flat string, number or
+     boolean values.
    - Declarations are checked when the app lifts: an invalid one (missing name, unknown
-     key, action without a view) stops the lift with a message naming the action.
+     key, action without a page) stops the lift with a message naming the action.
 
 2. While the page renders, the hook signs the event (name, properties, page path, referring
-   domain, utm parameters) and adds `<script src="/lookout.js" defer data-event="…">`
-   before `</body>`.
+   domain, utm parameters) and hands it to the browser: in
+   `<script src="/lookout.js" defer data-event="…">`, added before `</body>`, or for
+   Inertia in the `lookout` prop of the page.
 3. When the page becomes visible, the script posts the signed event to `/lookout/events`.
    The browser cannot change it or invent events of its own.
 
@@ -89,15 +104,76 @@ legitimate interest, Art. 6(1)(f) GDPR).
 Requires Sails 1.x, Node.js 22+ and a [supported database](#databases).
 
 ```sh
-npm install github:MaNi4/sails-hook-lookout#v0.2.0
+npm install github:MaNi4/sails-hook-lookout#v0.3.0
 psql "$DATABASE_URL" -f node_modules/sails-hook-lookout/adapters/postgresql/schema.sql
 ```
 
-Lookout is not on npm yet, so it installs from GitHub; pin a release tag (`#v0.2.0`)
+Lookout is not on npm yet, so it installs from GitHub; pin a release tag (`#v0.3.0`)
 so an update is always your decision.
 
 The tables are created by the adapter's schema, not by Waterline, so they work with
 `migrate: 'safe'`. Until they exist, the hook logs a warning and tracks nothing.
+
+## The Boring JavaScript Stack
+
+Inertia renders the first page on the server and every later one in the browser, from
+JSON. Lookout puts the signed event in the `lookout` prop of each declared page, and the
+script reads it from Inertia's `inertia:navigate` browser event, so client-side visits
+count like full page loads. No code in your Vue, React or Svelte components.
+
+1. **Load the script** in the root view, right before the app's scripts and without
+   `defer`, so it listens before Inertia shows the first page:
+
+   ```ejs
+   <!-- views/app.ejs -->
+       <script src="/lookout.js"></script>
+       <%- shipwright.scripts() %>
+     </body>
+   ```
+
+2. **Declare** pages as above; `properties` receives the page props:
+
+   ```js
+   // api/controllers/blog/view-post.js
+   module.exports = {
+     exits: { success: { responseType: 'inertia' } },
+
+     lookout: {
+       name: 'post:view',
+       properties: ({ post }) => ({ postId: post.id })
+     },
+
+     fn: async function ({ slug }) {
+       const post = await Post.findOne({ slug });
+       return { page: 'blog/post', props: { post } };
+     }
+   };
+   ```
+
+3. **Use a [supported database](#databases).** The Boring Stack templates use SQLite in
+   development: point the datastore at PostgreSQL, or turn Lookout off in development
+   (`enabled: false`, no database needed). Their test hook,
+   [Sounding](https://github.com/sailscastshq/sounding), replaces the default datastore with
+   SQLite unless told otherwise:
+
+   ```js
+   // config/local.js (development)
+   module.exports = {
+     datastores: { default: { adapter: 'sails-postgresql', url: 'postgresql://…' } },
+     sounding: { datastore: { mode: 'inherit' } },
+   };
+   ```
+
+Good to know:
+
+- A page counts once per server response: going back to a page Inertia restores from
+  history does not count it again, and partial reloads (`router.reload({ only })`) are
+  not page views.
+- With CSRF protection on, the token travels in the prop too; nothing to set up.
+- The `lookout` prop is reserved on declared pages: a page that returns its own is left
+  untracked, with a warning in the log.
+- Tested with the Vue template (`create-sails --vue`); React and Svelte use the same
+  Inertia browser event.
 
 ## Databases
 
@@ -320,9 +396,11 @@ If a visit does not show up:
    chromium --incognito --disable-extensions --user-data-dir=/tmp/lookout-test http://localhost:1337/
    ```
 
-4. **Is the script on the page?** `document.querySelector('script[data-event]')` is
+4. **Is the event on the page?** `document.querySelector('script[data-event]')` is
    `null` when the server decided not to track (checks 1–3) or the action has no
-   `lookout` declaration.
+   `lookout` declaration. With Inertia, look for the `lookout` prop of the page instead
+   (Vue devtools or the response in the Network tab), and check that
+   `<script src="/lookout.js">` comes before the app's scripts.
 5. **Does the beacon arrive?** In the Network tab, `POST /lookout/events` should answer
    `204`. A blocked request points to an ad blocker.
 6. **Do the tables exist?** Otherwise the hook logs `Lookout: missing tables …` at lift.

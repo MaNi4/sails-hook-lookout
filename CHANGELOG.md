@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 Changes to the database tables are listed under **Schema** with the SQL to run.
 
+## [0.3.0] - 2026-11-27
+
+### Added
+
+- **The Boring JavaScript Stack (Inertia.js).** Actions with `responseType: 'inertia'`
+  can declare `lookout` like `res.view` actions. The event travels in the `lookout` page
+  prop and the script reads it from Inertia's `inertia:navigate` event, so client-side
+  visits count too. Partial reloads and pages restored from history are not counted.
+  Setup: `<script src="/lookout.js"></script>` in the root view, before the app's scripts
+  (see README).
+
+### Changed
+
+- An action without a page now fails with "an exit with viewTemplatePath or
+  responseType: 'inertia'".
+
 ## [0.2.0] - 2026-11-27
 
 ### Changed
@@ -36,5 +52,6 @@ Changes to the database tables are listed under **Schema** with the SQL to run.
 
 - Initial tables: `adapters/postgresql/schema.sql`.
 
+[0.3.0]: https://github.com/MaNi4/sails-hook-lookout/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MaNi4/sails-hook-lookout/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MaNi4/sails-hook-lookout/releases/tag/v0.1.0

@@ -13,7 +13,9 @@ const path = require('path');
 const requestContext = require('./lib/request-context');
 const isBot = require('./lib/bot-detector');
 const createSignedToken = require('./lib/signed-token');
+const createPageEvent = require('./lib/page-event');
 const createViewTracking = require('./lib/view-tracking');
+const createInertiaTracking = require('./lib/inertia-tracking');
 const createVisitorIdentity = require('./lib/visitor-identity');
 const createTracker = require('./lib/tracker');
 const createMaintenance = require('./lib/maintenance');
@@ -75,19 +77,24 @@ module.exports = function defineLookoutHook(sails) {
         maxAgeMs: TOKEN_MAX_AGE
       });
 
+      const warn = message => sails.log.warn(message);
+      const pageEvent = createPageEvent({
+        contextFor: contextFor,
+        shouldTrack: tracker.shouldTrack,
+        signer: signer,
+        warn: warn
+      });
+
       services = {
         adapter: adapter,
         tracker: tracker,
         signer: signer,
         maintenance: createMaintenance({ store: adapter, retentionDays: config().retentionDays }),
-        wrapView: createViewTracking({
-          findDeclaration: findDeclaration,
-          contextFor: contextFor,
-          shouldTrack: tracker.shouldTrack,
-          signer: signer,
-          scriptSrc: SCRIPT_SRC,
-          warn: message => sails.log.warn(message)
-        })
+        // One per way a page is rendered; each acts only on actions declared for it.
+        renderers: [
+          createViewTracking({ findDeclaration: findDeclaration, pageEvent: pageEvent, scriptSrc: SCRIPT_SRC }),
+          createInertiaTracking({ findDeclaration: findDeclaration, pageEvent: pageEvent, warn: warn })
+        ]
       };
     }
     return services;
@@ -114,7 +121,7 @@ module.exports = function defineLookoutHook(sails) {
 
   function prepareView(req, res, next) {
     if (enabled()) {
-      getServices().wrapView(req, res);
+      getServices().renderers.forEach(wrap => wrap(req, res));
     }
     return next();
   }
