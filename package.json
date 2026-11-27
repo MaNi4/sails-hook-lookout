@@ -1,6 +1,6 @@
 {
   "name": "sails-hook-lookout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Privacy-friendly page view tracking for Sails.js: no cookies, no bots, GDPR minded. Inspired by the Ahoy gem.",
   "main": "index.js",
   "files": [

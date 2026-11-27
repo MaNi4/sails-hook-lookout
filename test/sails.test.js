@@ -62,7 +62,7 @@ function freePort() {
   });
 }
 
-async function lift(actions, adapter) {
+async function lift(actions, adapter, lookout = {}) {
   const port = await freePort();
   const app = new Sails();
   // Without sails-hook-orm there is no datastore; the memory adapter does not need one.
@@ -78,7 +78,7 @@ async function lift(actions, adapter) {
       views: { layout: false },
       controllers: { moduleDefinitions: actions },
       routes: Object.fromEntries(Object.keys(actions).map(id => [`GET /${id.replace('view-', '')}`, id])),
-      lookout: { secret: 'test-secret', adapter: () => adapter }
+      lookout: Object.assign({ secret: 'test-secret', adapter: () => adapter }, lookout)
     }, err => (err ? reject(err) : resolve(app)));
   });
 }
@@ -151,4 +151,10 @@ test('an invalid declaration stops the lift', async () => {
     // Lower it should it lift after all, so a regression fails instead of hanging.
     await lower(await lift({ 'view-article': broken }, memoryAdapter()));
   }, /Action "view-article"/);
+});
+
+test('an exclude that is not a function stops the lift', async () => {
+  await assert.rejects(async () => {
+    await lower(await lift({ 'view-article': viewArticle }, memoryAdapter(), { exclude: true }));
+  }, /`exclude` must be a function/);
 });

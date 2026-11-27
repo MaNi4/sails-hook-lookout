@@ -34,6 +34,11 @@ test('missing headers mean no signal', () => {
   assert.equal(context.doNotTrack, false);
 });
 
+test('excludes nobody without an exclude option', () => {
+  const context = requestContext(fakeRequest({}, { me: { id: 1 } }), null);
+  assert.equal(context.excluded, false);
+});
+
 test('applies the exclude option to the request', () => {
   const context = requestContext(fakeRequest({}, { me: { id: 1 } }), req => Boolean(req.me));
   assert.equal(context.excluded, true);

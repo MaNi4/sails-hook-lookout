@@ -50,7 +50,7 @@ A request leaves no trace when any of these applies:
 | The page is never visible (prerender, background tab) | browser |
 | Known bot user agent ([isbot](https://github.com/omrilotan/isbot)) or none at all | server |
 | `Sec-GPC: 1` (Global Privacy Control) or `DNT: 1` | browser and server |
-| `exclude(req)` returns true (logged-in users by default) | server |
+| `exclude(req)` returns true (your rule, e.g. your own admins; nobody by default) | server |
 | Missing or wrong CSRF token, forged or expired (24 h) event | server |
 
 ### Privacy signals lower your numbers, on purpose
@@ -89,11 +89,11 @@ legitimate interest, Art. 6(1)(f) GDPR).
 Requires Sails 1.x, Node.js 22+ and a [supported database](#databases).
 
 ```sh
-npm install github:MaNi4/sails-hook-lookout#v0.1.0
+npm install github:MaNi4/sails-hook-lookout#v0.2.0
 psql "$DATABASE_URL" -f node_modules/sails-hook-lookout/adapters/postgresql/schema.sql
 ```
 
-Lookout is not on npm yet, so it installs from GitHub; pin a release tag (`#v0.1.0`)
+Lookout is not on npm yet, so it installs from GitHub; pin a release tag (`#v0.2.0`)
 so an update is always your decision.
 
 The tables are created by the adapter's schema, not by Waterline, so they work with
@@ -157,10 +157,28 @@ module.exports.lookout = {
   datastore: 'default',            // Sails datastore (PostgreSQL)
   retentionDays: 395,              // delete older data
   secret: null,                    // event signing key; falls back to sails.config.session.secret
-  exclude: req => Boolean(req.me), // requests that are never tracked
+  exclude: null,                   // (req) => boolean: requests never tracked (see below)
   adapter: null,                   // own database adapter (see Databases)
 };
 ```
+
+### Excluding your own visits
+
+By default everyone is tracked: Lookout does not know how your app logs users in, and
+your readers may well have accounts (a members' area, a portal). To leave out your own
+visits, tell it who you are with `exclude`, a function of the request:
+
+```js
+// config/lookout.js
+module.exports.lookout = {
+  // Sails "Web App" template: req.me is the logged-in user
+  exclude: req => Boolean(req.me && req.me.isSuperAdmin),
+};
+```
+
+Use whatever identifies those users in your app (`req.me`, `req.user`, `req.session`).
+It runs when a declared action renders its view, after your policies, so values they set
+on `req` are available. An `exclude` that is neither a function nor `null` stops the lift.
 
 ### Per environment
 
@@ -258,8 +276,8 @@ module.exports = {
 </table>
 ```
 
-Do not declare `lookout` on admin actions: logged-in users are excluded anyway, and
-statistics pages are not what you want to measure.
+Do not declare `lookout` on admin actions: statistics pages are not what you want to
+measure, and only declared actions are tracked.
 
 ### Anything else: query the tables
 
@@ -293,7 +311,8 @@ If a visit does not show up:
 
 1. **Is Lookout enabled** in this environment? (`enabled: false` in `config/env/*.js`;
    override with `sails_lookout__enabled=true`)
-2. **Are you logged in?** Logged-in users are excluded by default; use a private window.
+2. **Does your `exclude` rule match you?** E.g. when it excludes your admin account,
+   log out or use a private window.
 3. **Does your browser send GPC or DNT?** Run `navigator.globalPrivacyControl` in the
    console. Brave always does, so do Firefox private windows. A clean Chromium works:
 

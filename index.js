@@ -158,13 +158,18 @@ module.exports = function defineLookoutHook(sails) {
         // Own database adapter, (datastore) => adapter (see adapters/contract.js).
         // By default chosen from the datastore's Sails adapter.
         adapter: null,
-        exclude: req => Boolean(req.me)
+        // (req) => boolean: requests the app never wants tracked, e.g. its own admins.
+        // Null tracks everyone; Lookout makes no assumption about how users log in.
+        exclude: null
       }
     },
 
     initialize: async function () {
       // Declarations are checked even when disabled, so mistakes show up in development.
       sails.on('router:before', loadDeclarations);
+      if (config().exclude !== null && typeof config().exclude !== 'function') {
+        throw new Error('Lookout: `exclude` must be a function (req) => boolean or null.');
+      }
       if (!enabled()) {
         sails.log.verbose('Lookout: disabled (sails.config.lookout.enabled = false).');
         return;

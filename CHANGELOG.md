@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 Changes to the database tables are listed under **Schema** with the SQL to run.
 
+## [0.2.0] - 2026-11-27
+
+### Changed
+
+- **`exclude` defaults to `null`: everyone is tracked**, logged-in users too. 0.1.0 left out
+  every request with `req.me`, which assumed the Sails Web App template and also left out
+  readers with an account. To keep the old behaviour, set
+  `exclude: req => Boolean(req.me)` in `config/lookout.js`.
+- An `exclude` that is neither a function nor `null` stops the lift.
+
 ## [0.1.0] - 2026-11-27
 
 ### Added
@@ -26,4 +36,5 @@ Changes to the database tables are listed under **Schema** with the SQL to run.
 
 - Initial tables: `adapters/postgresql/schema.sql`.
 
+[0.2.0]: https://github.com/MaNi4/sails-hook-lookout/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MaNi4/sails-hook-lookout/releases/tag/v0.1.0
