@@ -1,4 +1,4 @@
-![Lookout: page view tracking for Sails.js. No cookies. No bots. GDPR minded.](.github/logo.png)
+![Lookout: page view tracking for Sails.js. No cookies. No bots. GDPR minded.](https://raw.githubusercontent.com/MaNi4/sails-hook-lookout/main/.github/logo.png)
 
 # sails-hook-lookout
 
@@ -67,6 +67,7 @@ A request leaves no trace when any of these applies:
 | `Sec-GPC: 1` (Global Privacy Control) or `DNT: 1` | browser and server |
 | `exclude(req)` returns true (your rule, e.g. your own admins; nobody by default) | server |
 | Missing or wrong CSRF token, forged or expired (24 h) event | server |
+| The same event sent again (each page view is recorded once) | server |
 
 ### Privacy signals lower your numbers, on purpose
 
@@ -96,6 +97,26 @@ Because the identity changes daily, Lookout counts **visitor-days**: someone who
 five different days counts five times. Unique visitors over longer periods cannot be
 counted without tracking people across days.
 
+### How accurate the numbers are
+
+Page views (`events`) are exact, unless you set a
+[`maxEventsPerVisit`](#limiting-events-per-visit). Visitors (`visitors`, `countVisits`) are an estimate,
+because without a cookie IP address and user agent are all there is to tell people apart:
+
+- **Fewer than there are people:** readers who share an IP address and the same browser
+  count as one. Think of an office or school behind one address, a family on one Wi-Fi,
+  or mobile carriers that put many customers behind one address (CGNAT). Browsers send
+  rather uniform user agents, so the same browser version on the same system looks
+  identical.
+- **More than there are people:** one reader counts again when their IP address changes
+  during the day, e.g. switching from Wi-Fi to mobile data, or a rotating IPv6 address.
+
+This is the price of tracking without cookies, and so without a consent banner for them.
+[Ahoy](https://github.com/ankane/ahoy) has the same limits when run without cookies
+(`Ahoy.cookies = :none`); with its default cookies it tells such readers apart, at the
+cost of a cookie. Use the visitor counts for trends and comparisons (which article is
+read most, did this month grow), not as an exact head count.
+
 Not legal advice. Mention the tracking in your privacy policy (legal basis is usually
 legitimate interest, Art. 6(1)(f) GDPR).
 
@@ -104,15 +125,74 @@ legitimate interest, Art. 6(1)(f) GDPR).
 Requires Sails 1.x, Node.js 22+ and a [supported database](#databases).
 
 ```sh
-npm install github:MaNi4/sails-hook-lookout#v0.3.0
-psql "$DATABASE_URL" -f node_modules/sails-hook-lookout/adapters/postgresql/schema.sql
+npm install sails-hook-lookout
 ```
 
-Lookout is not on npm yet, so it installs from GitHub; pin a release tag (`#v0.3.0`)
-so an update is always your decision.
+Sails loads it from `node_modules` by itself; there is nothing to register. Its tables
+are created when the app lifts, see [Migrations](#migrations). Read the
+[changelog](CHANGELOG.md) before upgrading: versions before 1.0 may change behaviour in
+a minor release.
 
-The tables are created by the adapter's schema, not by Waterline, so they work with
-`migrate: 'safe'`. Until they exist, the hook logs a warning and tracks nothing.
+### Migrations
+
+Lookout keeps its tables up to date itself, with versioned migrations of its own
+(`adapters/postgresql/migrations/`), not with Waterline. They work with
+`migrate: 'safe'` and touch only Lookout's tables (`lookout_*`), never your app's.
+
+- **At lift** the hook applies the migrations not applied yet, each once and in its own
+  transaction: one that fails leaves nothing behind and stops the later ones.
+  `lookout_migrations` lists what was applied. New migrations come with upgrades; the
+  [changelog](CHANGELOG.md) names them.
+- **Several instances** lifting at once are safe: a database lock lets one migrate
+  while the others wait.
+- **Your data stays.** Migrations add to the tables and never empty them. Databases set
+  up by hand for Lookout 0.1–0.3 (`schema.sql`) are taken over as they are.
+- While a migration is pending or has failed, nothing is tracked and the log says why;
+  pages render as always.
+
+To apply them yourself instead, e.g. where the app's database user may not change
+tables, turn it off:
+
+```js
+// config/lookout.js
+module.exports.lookout = {
+  migrate: false,
+};
+```
+
+At every lift with migrations pending, the log says so and gives the command that
+applies exactly those, in order and in one transaction:
+
+```
+warn: Lookout: database migrations 002-event-uuid are pending and `migrate` is false,
+so nothing is tracked. Apply them, then restart the app:
+
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction \
+  -f node_modules/sails-hook-lookout/adapters/postgresql/migrations/002-event-uuid.sql
+```
+
+Run it from the app's folder, with `DATABASE_URL` set to the app's database. Applying a
+migration twice by mistake is harmless: each file records itself in
+`lookout_migrations` as its first statement, so a second run stops there with
+`duplicate key … lookout_migrations_pkey` before changing anything.
+
+### Behind a proxy: set `trustProxy`
+
+Visitors are told apart by IP address and user agent. Behind a reverse proxy or load
+balancer (nginx, Caddy, Kamal, Heroku, Fly.io, Cloudflare, …) every request comes from
+the proxy's IP unless Sails reads the client's from `X-Forwarded-For`. Without it, all
+readers with the same browser become one visitor a day and the numbers are useless:
+
+```js
+// config/env/production.js
+module.exports = {
+  http: { trustProxy: true },
+};
+```
+
+Enable it only when the app is reachable solely through the proxy, otherwise a client
+can send its own `X-Forwarded-For`. Check it with a log line in any action:
+`sails.log(req.ip)` should print your own address, not the proxy's.
 
 ## The Boring JavaScript Stack
 
@@ -192,7 +272,7 @@ Waterline would run on every database, but it cannot do three things Lookout rel
 | Lookout needs | Why | Waterline |
 |---|---|---|
 | Atomic find-or-create of visits and daily salts | concurrent requests of one reader must not create two visits or two salts | `findOrCreate` is not atomic; concurrent calls create duplicates |
-| The 100-events-per-visit cap in one statement | a replayed event must not flood the table | two queries with a race in between; the cap leaks |
+| Record an event once, even when it is sent twice at the same moment | a resent event must not count again | no insert-or-ignore; a unique attribute throws, and handling the race is left to your code |
 | `count(DISTINCT …) … GROUP BY` over a JSON property | `count()` and `top()` | no `GROUP BY`, no `DISTINCT`, no queries into JSON; every event would be loaded and summed in JavaScript |
 
 Registering models from a hook is also experimental in Sails
@@ -204,14 +284,14 @@ adapter with native queries:
 adapters/
   contract.js        what an adapter implements (store + reports, 9 methods)
   index.js           built-in adapters by Sails adapter name
-  postgresql/        index.js, store.js, reports.js, schema.sql
+  postgresql/        index.js, store.js, reports.js, migrations.js, migrations/
 ```
 
 To add one, either:
 
-- **contribute it**: add `adapters/<db>/` with its schema, register it in
+- **contribute it**: add `adapters/<db>/` with its migrations, register it in
   `adapters/index.js`, and add `test/<db>.test.js` that runs the shared contract suite
-  (`test/adapter-contract.js`) against a real database, like `test/postgresql.test.js`; or
+  (`adapters/contract-tests.js`) against a real database, like `test/postgresql.test.js`; or
 - **plug in your own** without forking:
 
   ```js
@@ -221,7 +301,19 @@ To add one, either:
   };
   ```
 
-  It is checked for all contract methods when first used.
+  It is checked for all contract methods when first used. Run the same contract suite
+  the built-in adapters pass, from your app's tests (`node:test`):
+
+  ```js
+  // test/lookout-adapter.test.js
+  const runAdapterContract = require('sails-hook-lookout/adapters/contract-tests');
+
+  runAdapterContract('my-database', {
+    createAdapter: () => require('../config/my-lookout-adapter')(datastore),
+    reset: async () => { /* empty the Lookout tables */ },
+    close: async () => { /* close the connection */ },
+  });
+  ```
 
 ## Options
 
@@ -235,8 +327,33 @@ module.exports.lookout = {
   secret: null,                    // event signing key; falls back to sails.config.session.secret
   exclude: null,                   // (req) => boolean: requests never tracked (see below)
   adapter: null,                   // own database adapter (see Databases)
+  migrate: true,                   // false: apply the migrations yourself (see Migrations)
+  maxEventsPerVisit: null,         // most events per visit; null: no limit (see below)
 };
 ```
+
+### Limiting events per visit
+
+Each page view is recorded once, however often its event is sent, so a resent event
+cannot count twice. A script can still load your pages over and over and send each new
+event once. Against that, `maxEventsPerVisit` caps the events of one visit (one IP
+address and browser during one UTC day):
+
+```js
+// config/lookout.js
+module.exports.lookout = {
+  maxEventsPerVisit: 1000,
+};
+```
+
+There is no limit by default, because a limit also cuts off real readers: everyone
+behind one IP address with the same browser is one visit (see
+[How accurate the numbers are](#how-accurate-the-numbers-are)), and a class or an office
+reading together reaches it, after which page views are undercounted. Set it high
+enough for that. The check is not serialized: requests of one visit that arrive at the
+same moment can add a few events beyond it. A rate limit in your proxy (see
+[Security notes](#security-notes)) is the better protection, and it can be used together
+with this.
 
 ### Excluding your own visits
 
@@ -358,7 +475,7 @@ measure, and only declared actions are tracked.
 ### Anything else: query the tables
 
 For other questions (views per day, referring domains, campaigns), query the tables
-directly. With the PostgreSQL adapter (columns in `adapters/postgresql/schema.sql`):
+directly. With the PostgreSQL adapter (columns in `adapters/postgresql/migrations/`):
 
 - `lookout_visits`: `id`, `landing_page`, `referring_domain`, `utm_source`, `utm_medium`,
   `utm_campaign`, `started_at`
@@ -403,14 +520,28 @@ If a visit does not show up:
    `<script src="/lookout.js">` comes before the app's scripts.
 5. **Does the beacon arrive?** In the Network tab, `POST /lookout/events` should answer
    `204`. A blocked request points to an ad blocker.
-6. **Do the tables exist?** Otherwise the hook logs `Lookout: missing tables …` at lift.
+6. **Are the tables up to date?** Look for `Lookout:` in the log at lift: a failed
+   migration, or with `migrate: false` the pending ones (see [Migrations](#migrations)).
+7. **Far fewer visits in production than expected?** Behind a proxy, set
+   [`trustProxy`](#behind-a-proxy-set-trustproxy).
 
 ## Security notes
 
 - Events are signed with HMAC-SHA256 and expire after 24 hours.
 - The endpoint requires the Sails CSRF token when CSRF protection is enabled.
-- A visit records at most 100 events, so a replayed event cannot flood the table.
-- Properties are limited to 10 flat string, number or boolean values.
+- A forged, malformed or expired event is rejected before the database is touched.
+- Every event carries a random id and is recorded once: sending it again, also many
+  times at the same moment, changes nothing.
+- **Rate-limit `POST /lookout/events` in front of the app** if you expect abuse. Each
+  accepted request writes up to three rows. A script that loads pages over and over and
+  sends their events, possibly with ever new user agents, inflates your numbers and your
+  tables. [`maxEventsPerVisit`](#limiting-events-per-visit) caps it per visit only.
+  Limit requests per IP where the IP is known, in the reverse proxy or CDN (nginx
+  `limit_req`, Caddy `rate_limit`, Cloudflare rate limiting rules). Lookout has no
+  limiter of its own: one kept in the app's memory does not work across several
+  instances, and it would also turn away readers who share an address.
+- Properties are limited to 10 flat string, number or boolean values (strings up to
+  200 characters).
 - Attribute values in the injected tag are HTML-escaped.
 
 ## Tests

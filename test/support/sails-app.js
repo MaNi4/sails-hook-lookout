@@ -23,10 +23,15 @@ function memoryAdapter() {
       }
       return found.id;
     },
-    insertEvent: async event => { events.push(event); },
+    insertEvent: async event => {
+      if (event.id === null || !events.some(e => e.id === event.id)) {
+        events.push(event);
+      }
+    },
     deleteSaltsBefore: async () => {},
     deleteVisitsBefore: async () => {},
-    missingTables: async () => [],
+    migrate: async () => [],
+    pendingMigrations: async () => [],
     countVisits: async () => visits.length,
     countEvents: async ({ name }) => {
       const matching = events.filter(e => e.name === name);

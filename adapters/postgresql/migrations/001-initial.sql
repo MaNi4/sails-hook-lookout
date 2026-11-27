@@ -1,9 +1,13 @@
--- sails-hook-lookout: tables for the PostgreSQL adapter.
--- Run once per database (Waterline migrations do not create these tables):
---
---   psql "$DATABASE_URL" -f node_modules/sails-hook-lookout/adapters/postgresql/schema.sql
+-- Lookout's tables. IF NOT EXISTS so that databases set up with schema.sql of
+-- Lookout 0.1–0.3 are adopted as they are, data included.
+-- Rules for every migration: see ../migrations.js.
 
-BEGIN;
+CREATE TABLE IF NOT EXISTS lookout_migrations (
+  name       text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO lookout_migrations (name) VALUES ('001-initial');
 
 -- One random salt per UTC day. Lookout deletes past salts, so a stored
 -- visit token can no longer be linked back to an IP address and user agent.
@@ -37,5 +41,3 @@ CREATE TABLE IF NOT EXISTS lookout_events (
 
 CREATE INDEX IF NOT EXISTS lookout_events_name_time_idx ON lookout_events (name, time);
 CREATE INDEX IF NOT EXISTS lookout_events_visit_id_idx ON lookout_events (visit_id);
-
-COMMIT;

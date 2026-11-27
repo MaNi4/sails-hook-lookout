@@ -4,7 +4,7 @@
  * configured with (`sails.getDatastore(config.datastore)`).
  *
  * Every method must be safe under concurrent calls from several app instances.
- * test/adapter-contract.js checks an implementation against a real database.
+ * adapters/contract-tests.js checks an implementation against a real database.
  *
  * @typedef {object} Adapter
  *
@@ -14,14 +14,25 @@
  *   otherwise returns the stored one. Atomic: concurrent calls get the same salt.
  * @property {(visit: Visit) => Promise<string|number>} findOrCreateVisit
  *   Id of the visit with `visit.visitToken`; creates it from `visit` if missing. Atomic.
- * @property {(event: Event, maxPerVisit: number) => Promise<void>} insertEvent
- *   Stores the event unless its visit already has `maxPerVisit` events.
+ * @property {(event: Event, maxPerVisit: number|null) => Promise<void>} insertEvent
+ *   Stores the event, unless an event with the same `id` is stored already (atomic:
+ *   concurrent calls store it once) or its visit already has `maxPerVisit` events
+ *   (null: no limit). Events with a null `id` are never duplicates.
  * @property {(day: string) => Promise<void>} deleteSaltsBefore
  *   Deletes salts of days before `day`.
  * @property {(time: Date) => Promise<void>} deleteVisitsBefore
  *   Deletes visits started before `time`, together with their events.
- * @property {() => Promise<Array<string>>} missingTables
- *   Names of tables (collections) that do not exist yet; empty when ready.
+ *
+ * Schema
+ * @property {() => Promise<Array<string>>} migrate
+ *   Brings the database up to date and returns the names of the migrations it applied.
+ *   Safe when several instances call it at once: each migration is applied once.
+ *   Data in the tables is kept.
+ * @property {() => Promise<Array<string>>} pendingMigrations
+ *   Names of migrations not applied yet; empty when the database is ready.
+ * @property {(names: Array<string>) => string} [migrationCommand]
+ *   Optional: the shell command that applies these migrations by hand, which the
+ *   hook logs when `migrate` is false. Without it the log names them only.
  *
  * Read side
  * @property {({ since: Date }) => Promise<number>} countVisits
@@ -41,6 +52,7 @@
  * @property {string|null} utmCampaign
  *
  * @typedef {object} Event
+ * @property {string|null} id random UUID of the event; null in tokens from before 0.4.0
  * @property {string|number} visitId
  * @property {string} name
  * @property {object} properties flat object of strings, numbers and booleans
@@ -48,8 +60,9 @@
  */
 
 const METHODS = [
-  'getOrCreateSalt', 'findOrCreateVisit', 'insertEvent', 'deleteSaltsBefore', 'deleteVisitsBefore', 'missingTables',
-  'countVisits', 'countEvents', 'topEvents'
+  'getOrCreateSalt', 'findOrCreateVisit', 'insertEvent', 'deleteSaltsBefore', 'deleteVisitsBefore',
+  'countVisits', 'countEvents', 'topEvents',
+  'migrate', 'pendingMigrations'
 ];
 
 /**

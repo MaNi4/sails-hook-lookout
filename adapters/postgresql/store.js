@@ -6,18 +6,13 @@
 module.exports = function createPostgresStore(query) {
   return {
     getOrCreateSalt: async function (day, candidate) {
-      // The outer SELECT does not see the row inserted in the same statement,
-      // hence the UNION: exactly one of the two branches returns the salt.
+      // DO UPDATE (a no-op) instead of DO NOTHING: it waits for a concurrent insert of the
+      // same day and returns that row. A SELECT in the same statement would not see it
+      // (its snapshot predates the other commit) and return nothing.
       const rows = await query(`
-        WITH inserted AS (
-          INSERT INTO lookout_salts (day, salt) VALUES ($1, $2)
-          ON CONFLICT (day) DO NOTHING
-          RETURNING salt
-        )
-        SELECT salt FROM inserted
-        UNION ALL
-        SELECT salt FROM lookout_salts WHERE day = $1
-        LIMIT 1`, [day, candidate]);
+        INSERT INTO lookout_salts (day, salt) VALUES ($1, $2)
+        ON CONFLICT (day) DO UPDATE SET salt = lookout_salts.salt
+        RETURNING salt`, [day, candidate]);
       return rows[0].salt;
     },
 
@@ -36,11 +31,15 @@ module.exports = function createPostgresStore(query) {
     },
 
     insertEvent: async function (event, maxPerVisit) {
+      // The unique uuid makes a resent event a no-op, also when both arrive at once.
+      // The optional cap is checked in the same statement, but not serialized: requests
+      // of one visit at the same moment can add a few events beyond it.
       await query(`
-        INSERT INTO lookout_events (visit_id, name, properties, time)
-        SELECT $1, $2, $3::jsonb, $4
-        WHERE (SELECT count(*) FROM lookout_events WHERE visit_id = $1) < $5`,
-      [event.visitId, event.name, JSON.stringify(event.properties), event.time, maxPerVisit]);
+        INSERT INTO lookout_events (uuid, visit_id, name, properties, time)
+        SELECT $1, $2, $3, $4::jsonb, $5
+        WHERE $6::integer IS NULL OR (SELECT count(*) FROM lookout_events WHERE visit_id = $2) < $6
+        ON CONFLICT (uuid) DO NOTHING`,
+      [event.id, event.visitId, event.name, JSON.stringify(event.properties), event.time, maxPerVisit]);
     },
 
     deleteSaltsBefore: async function (day) {
@@ -50,13 +49,6 @@ module.exports = function createPostgresStore(query) {
     deleteVisitsBefore: async function (time) {
       // Events go with their visit (ON DELETE CASCADE).
       await query('DELETE FROM lookout_visits WHERE started_at < $1', [time]);
-    },
-
-    missingTables: async function () {
-      const rows = await query(`
-        SELECT name FROM unnest($1::text[]) AS name
-        WHERE to_regclass(name) IS NULL`, [['lookout_salts', 'lookout_visits', 'lookout_events']]);
-      return rows.map(row => row.name);
     }
   };
 };

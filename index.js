@@ -21,12 +21,12 @@ const createTracker = require('./lib/tracker');
 const createMaintenance = require('./lib/maintenance');
 const readDeclarations = require('./lib/declarations');
 const disabledReports = require('./lib/disabled-reports');
+const { DAY_MS } = require('./lib/utc-day');
 const resolveAdapter = require('./adapters');
 const { assertAdapter } = require('./adapters/contract');
 
 const SCRIPT_SRC = '/lookout.js';
-const DAY = 24 * 60 * 60 * 1000;
-const TOKEN_MAX_AGE = DAY;
+const TOKEN_MAX_AGE = DAY_MS;
 const MAINTENANCE_INTERVAL = 60 * 60 * 1000;
 
 module.exports = function defineLookoutHook(sails) {
@@ -35,9 +35,16 @@ module.exports = function defineLookoutHook(sails) {
   let adapterFactory = null;
   let services = null;
   let maintenanceTimer = null;
+  // True once the database is migrated; until then no page gets an event and none is written.
+  let ready = false;
 
   function config() {
     return sails.config.lookout;
+  }
+
+  // Own key, or the app's session secret.
+  function secret() {
+    return config().secret || (sails.config.session && sails.config.session.secret);
   }
 
   function enabled() {
@@ -71,9 +78,14 @@ module.exports = function defineLookoutHook(sails) {
   function getServices() {
     if (!services) {
       const adapter = assertAdapter(adapterFactory.create(sails.getDatastore(config().datastore)), adapterFactory.name);
-      const tracker = createTracker({ store: adapter, identity: createVisitorIdentity(adapter), isBot: isBot });
+      const tracker = createTracker({
+        store: adapter,
+        identity: createVisitorIdentity(adapter),
+        isBot: isBot,
+        maxEventsPerVisit: config().maxEventsPerVisit
+      });
       const signer = createSignedToken({
-        secret: config().secret || (sails.config.session && sails.config.session.secret),
+        secret: secret(),
         maxAgeMs: TOKEN_MAX_AGE
       });
 
@@ -109,25 +121,40 @@ module.exports = function defineLookoutHook(sails) {
   }
 
   async function start() {
-    const missing = await getServices().adapter.missingTables();
-    if (missing.length) {
-      sails.log.warn(`Lookout: missing tables ${missing.join(', ')}. Create them with the schema of the ${adapterFactory.name} adapter (adapters/); nothing is tracked until then.`);
+    const adapter = getServices().adapter;
+    if (config().migrate) {
+      const applied = await adapter.migrate();
+      if (applied.length) {
+        sails.log.info(`Lookout: applied database migrations ${applied.join(', ')}.`);
+      }
+    }
+    const pending = await adapter.pendingMigrations();
+    if (pending.length) {
+      const how = typeof adapter.migrationCommand === 'function'
+        ? `Apply them, then restart the app:\n\n  ${adapter.migrationCommand(pending)}\n`
+        : `Apply them with the migrations of the ${adapterFactory.name} adapter, then restart the app.`;
+      sails.log.warn(`Lookout: database migrations ${pending.join(', ')} are pending and \`migrate\` is false, so nothing is tracked. ${how}`);
       return;
     }
+    ready = true;
     await runMaintenance();
     maintenanceTimer = setInterval(runMaintenance, MAINTENANCE_INTERVAL);
     maintenanceTimer.unref();
   }
 
+  function tracking() {
+    return enabled() && ready;
+  }
+
   function prepareView(req, res, next) {
-    if (enabled()) {
+    if (tracking()) {
       getServices().renderers.forEach(wrap => wrap(req, res));
     }
     return next();
   }
 
   async function receiveEvent(req, res) {
-    if (!enabled()) {
+    if (!tracking()) {
       return res.sendStatus(204);
     }
     const event = getServices().signer.verify(req.body && req.body.event);
@@ -150,7 +177,7 @@ module.exports = function defineLookoutHook(sails) {
   }
 
   function since(days) {
-    return new Date(Date.now() - days * DAY);
+    return new Date(Date.now() - days * DAY_MS);
   }
 
   return {
@@ -167,7 +194,14 @@ module.exports = function defineLookoutHook(sails) {
         adapter: null,
         // (req) => boolean: requests the app never wants tracked, e.g. its own admins.
         // Null tracks everyone; Lookout makes no assumption about how users log in.
-        exclude: null
+        exclude: null,
+        // false: the hook does not migrate its tables at lift; apply the adapter's
+        // migrations yourself (README, Migrations). Nothing is tracked while any is pending.
+        migrate: true,
+        // Most events one visit (visitor-day) records; null: no limit. A limit caps
+        // what a script loading pages over and over can write, but also cuts off real
+        // readers who share an IP address and browser.
+        maxEventsPerVisit: null
       }
     },
 
@@ -177,11 +211,18 @@ module.exports = function defineLookoutHook(sails) {
       if (config().exclude !== null && typeof config().exclude !== 'function') {
         throw new Error('Lookout: `exclude` must be a function (req) => boolean or null.');
       }
+      if (typeof config().migrate !== 'boolean') {
+        throw new Error('Lookout: `migrate` must be true or false.');
+      }
+      const max = config().maxEventsPerVisit;
+      if (max !== null && !(Number.isInteger(max) && max > 0)) {
+        throw new Error('Lookout: `maxEventsPerVisit` must be a positive integer or null (no limit).');
+      }
       if (!enabled()) {
         sails.log.verbose('Lookout: disabled (sails.config.lookout.enabled = false).');
         return;
       }
-      if (!config().secret && !(sails.config.session && sails.config.session.secret)) {
+      if (!secret()) {
         throw new Error('Lookout needs a secret: set sails.config.lookout.secret or sails.config.session.secret.');
       }
       const datastoreConfig = (sails.config.datastores || {})[config().datastore] || {};

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const isValidEventProperties = require('../lib/event-properties');
+const { isValidEventProperties } = require('../lib/event-properties');
 
 test('accepts a small flat object of primitives', () => {
   assert.equal(isValidEventProperties({}), true);

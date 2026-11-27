@@ -10,13 +10,15 @@ function setup({ track = true } = {}) {
     contextFor: () => ({ pageUrl: 'https://example.com/sk/blog/a?q=1', referrer: 'https://www.google.com/search?q=x' }),
     shouldTrack: () => track,
     signer: { sign: payload => payload },
-    warn: message => warnings.push(message)
+    warn: message => warnings.push(message),
+    newId: () => 'event-id'
   });
   return { pageEvent, warnings };
 }
 
 test('signs the declared name, its properties and the visit', () => {
   assert.deepEqual(setup().pageEvent({}, declaration, 'blogs/view-one-blog', { blog: { id: 2 } }), {
+    id: 'event-id',
     name: 'blog:view',
     properties: { blogId: 2 },
     visit: { landingPage: '/sk/blog/a', referringDomain: 'google.com', utmSource: null, utmMedium: null, utmCampaign: null }
